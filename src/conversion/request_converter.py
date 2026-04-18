@@ -1,10 +1,9 @@
 import json
+import logging
 from typing import Dict, Any, List
-from venv import logger
 from src.core.constants import Constants
 from src.models.claude import ClaudeMessagesRequest, ClaudeMessage
 from src.core.config import config
-import logging
 
 logger = logging.getLogger(__name__)
 
@@ -16,6 +15,10 @@ def convert_claude_to_openai(
 
     # Map model
     openai_model = model_manager.map_claude_model_to_openai(claude_request.model)
+
+    # Warn about unsupported thinking/extended thinking parameter
+    if claude_request.thinking and claude_request.thinking.enabled:
+        logger.warning("Extended thinking is not supported by OpenAI-compatible providers; ignoring thinking parameter")
 
     # Convert messages
     openai_messages = []
@@ -246,7 +249,7 @@ def parse_tool_result_content(content):
                 else:
                     try:
                         result_parts.append(json.dumps(item, ensure_ascii=False))
-                    except:
+                    except Exception:
                         result_parts.append(str(item))
         return "\n".join(result_parts).strip()
 
@@ -255,10 +258,10 @@ def parse_tool_result_content(content):
             return content.get("text", "")
         try:
             return json.dumps(content, ensure_ascii=False)
-        except:
+        except Exception:
             return str(content)
 
     try:
         return str(content)
-    except:
+    except Exception:
         return "Unparseable content"

@@ -11,7 +11,7 @@ from src.models.claude import ClaudeMessagesRequest, ClaudeTokenCountRequest
 from src.conversion.request_converter import convert_claude_to_openai
 from src.conversion.response_converter import (
     convert_openai_to_claude_response,
-    convert_openai_streaming_to_claude_with_cancellation,
+    convert_openai_streaming_to_claude,
 )
 from src.core.model_manager import model_manager
 
@@ -74,7 +74,7 @@ async def create_message(request: ClaudeMessagesRequest, http_request: Request, 
                     openai_request, request_id
                 )
                 return StreamingResponse(
-                    convert_openai_streaming_to_claude_with_cancellation(
+                    convert_openai_streaming_to_claude(
                         openai_stream,
                         request,
                         logger,

@@ -23,7 +23,6 @@ class Config:
         
         # Connection settings
         self.request_timeout = int(os.environ.get("REQUEST_TIMEOUT", "90"))
-        self.max_retries = int(os.environ.get("MAX_RETRIES", "2"))
         
         # Model settings - BIG and SMALL models
         self.big_model = os.environ.get("BIG_MODEL", "gpt-4o")
@@ -31,13 +30,8 @@ class Config:
         self.small_model = os.environ.get("SMALL_MODEL", "gpt-4o-mini")
         
     def validate_api_key(self):
-        """Basic API key validation"""
-        if not self.openai_api_key:
-            return False
-        # Basic format check for OpenAI API keys
-        if not self.openai_api_key.startswith('sk-'):
-            return False
-        return True
+        """Check if API key is configured"""
+        return bool(self.openai_api_key)
         
     def validate_client_api_key(self, client_api_key):
         """Validate client's Anthropic API key"""
@@ -71,7 +65,7 @@ class Config:
 
 try:
     config = Config()
-    print(f" Configuration loaded: API_KEY={'*' * 20}..., BASE_URL='{config.openai_base_url}'")
+    print(f"Configuration loaded: API_KEY={'*' * 20}..., BASE_URL='{config.openai_base_url}'")
 except Exception as e:
-    print(f"=4 Configuration Error: {e}")
+    print(f"Configuration Error: {e}")
     sys.exit(1)
