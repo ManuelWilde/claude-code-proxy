@@ -1,77 +1,151 @@
+import hmac
 import os
 import sys
+from dataclasses import dataclass, field
+from typing import Dict, Optional
 
-# Configuration
+
+@dataclass
+class ProviderConfig:
+    api_key: str
+    base_url: str
+    model: str
+    api_version: Optional[str] = None
+    custom_headers: Dict[str, str] = field(default_factory=dict)
+
+
+def _get_custom_headers(prefix: str = "CUSTOM_HEADER_") -> Dict[str, str]:
+    custom_headers = {}
+    for env_key, env_value in os.environ.items():
+        if env_key.startswith(prefix):
+            header_name = env_key[len(prefix):]
+            if header_name:
+                header_name = header_name.replace('_', '-')
+                custom_headers[header_name] = env_value
+    return custom_headers
+
+
 class Config:
     def __init__(self):
-        self.openai_api_key = os.environ.get("OPENAI_API_KEY")
-        if not self.openai_api_key:
-            raise ValueError("OPENAI_API_KEY not found in environment variables")
-        
-        # Add Anthropic API key for client validation
+        # Global defaults
+        global_api_key = os.environ.get("OPENAI_API_KEY", "")
+        global_base_url = os.environ.get("OPENAI_BASE_URL", "https://api.openai.com/v1")
+        global_custom_headers = _get_custom_headers()
+
+        # Per-tier provider configs with fallback to global vars
+        self.opus = ProviderConfig(
+            api_key=os.environ.get("OPUS_API_KEY", global_api_key),
+            base_url=os.environ.get("OPUS_BASE_URL", global_base_url),
+            model=os.environ.get("BIG_MODEL", "gpt-4o"),
+            api_version=os.environ.get("OPUS_API_VERSION", os.environ.get("AZURE_API_VERSION")),
+            custom_headers=global_custom_headers.copy(),
+        )
+        self.sonnet = ProviderConfig(
+            api_key=os.environ.get("SONNET_API_KEY", global_api_key),
+            base_url=os.environ.get("SONNET_BASE_URL", global_base_url),
+            model=os.environ.get("MIDDLE_MODEL", os.environ.get("BIG_MODEL", "gpt-4o")),
+            api_version=os.environ.get("SONNET_API_VERSION", os.environ.get("AZURE_API_VERSION")),
+            custom_headers=global_custom_headers.copy(),
+        )
+        self.haiku = ProviderConfig(
+            api_key=os.environ.get("HAIKU_API_KEY", global_api_key),
+            base_url=os.environ.get("HAIKU_BASE_URL", global_base_url),
+            model=os.environ.get("SMALL_MODEL", "gpt-4o-mini"),
+            api_version=os.environ.get("HAIKU_API_VERSION", os.environ.get("AZURE_API_VERSION")),
+            custom_headers=global_custom_headers.copy(),
+        )
+
+        # Backward-compatible aliases
+        self.openai_api_key = self.sonnet.api_key
+        self.openai_base_url = self.sonnet.base_url
+        self.big_model = self.opus.model
+        self.middle_model = self.sonnet.model
+        self.small_model = self.haiku.model
+        self.azure_api_version = os.environ.get("AZURE_API_VERSION")
+
+        # Client validation
         self.anthropic_api_key = os.environ.get("ANTHROPIC_API_KEY")
         if not self.anthropic_api_key:
             print("Warning: ANTHROPIC_API_KEY not set. Client API key validation will be disabled.")
-        
-        self.openai_base_url = os.environ.get("OPENAI_BASE_URL", "https://api.openai.com/v1")
-        self.azure_api_version = os.environ.get("AZURE_API_VERSION")  # For Azure OpenAI
+
+        # Server settings
         self.host = os.environ.get("HOST", "0.0.0.0")
         self.port = int(os.environ.get("PORT", "8082"))
         self.log_level = os.environ.get("LOG_LEVEL", "INFO")
         self.max_tokens_limit = int(os.environ.get("MAX_TOKENS_LIMIT", "4096"))
         self.min_tokens_limit = int(os.environ.get("MIN_TOKENS_LIMIT", "100"))
-        
+
         # Connection settings
         self.request_timeout = int(os.environ.get("REQUEST_TIMEOUT", "90"))
         self.max_retries = int(os.environ.get("MAX_RETRIES", "2"))
-        
-        # Model settings - BIG and SMALL models
-        self.big_model = os.environ.get("BIG_MODEL", "gpt-4o")
-        self.middle_model = os.environ.get("MIDDLE_MODEL", self.big_model)
-        self.small_model = os.environ.get("SMALL_MODEL", "gpt-4o-mini")
-        
+
+        # Limits
+        self.max_body_mb = int(os.environ.get("MAX_BODY_MB", "10"))
+        self.rate_limit = int(os.environ.get("RATE_LIMIT", "60"))
+
+    def get_tier(self, tier: str) -> ProviderConfig:
+        tiers = {"opus": self.opus, "sonnet": self.sonnet, "haiku": self.haiku}
+        return tiers[tier]
+
+    def update_tier(self, tier: str, **kwargs):
+        provider = self.get_tier(tier)
+        for key, value in kwargs.items():
+            if value is not None and hasattr(provider, key):
+                setattr(provider, key, value)
+        # Sync backward-compat aliases
+        self.big_model = self.opus.model
+        self.middle_model = self.sonnet.model
+        self.small_model = self.haiku.model
+
     def validate_api_key(self):
-        """Basic API key validation"""
-        if not self.openai_api_key:
-            return False
-        # Basic format check for OpenAI API keys
-        if not self.openai_api_key.startswith('sk-'):
-            return False
-        return True
-        
+        return bool(self.openai_api_key)
+
     def validate_client_api_key(self, client_api_key):
-        """Validate client's Anthropic API key"""
-        # If no ANTHROPIC_API_KEY is set in environment, skip validation
         if not self.anthropic_api_key:
             return True
-            
-        # Check if the client's API key matches the expected value
-        return client_api_key == self.anthropic_api_key
-    
+        if not client_api_key or not self.anthropic_api_key:
+            return False
+        return hmac.compare_digest(client_api_key, self.anthropic_api_key)
+
     def get_custom_headers(self):
-        """Get custom headers from environment variables"""
-        custom_headers = {}
-        
-        # Get all environment variables
-        env_vars = dict(os.environ)
-        
-        # Find CUSTOM_HEADER_* environment variables
-        for env_key, env_value in env_vars.items():
-            if env_key.startswith('CUSTOM_HEADER_'):
-                # Convert CUSTOM_HEADER_KEY to Header-Key
-                # Remove 'CUSTOM_HEADER_' prefix and convert to header format
-                header_name = env_key[14:]  # Remove 'CUSTOM_HEADER_' prefix
-                
-                if header_name:  # Make sure it's not empty
-                    # Convert underscores to hyphens for HTTP header format
-                    header_name = header_name.replace('_', '-')
-                    custom_headers[header_name] = env_value
-        
-        return custom_headers
+        return _get_custom_headers()
+
+    def to_env_dict(self) -> Dict[str, str]:
+        """Serialize config to env var dict for persistence."""
+        d = {}
+        for tier_name, prefix, provider in [
+            ("opus", "OPUS", self.opus),
+            ("sonnet", "SONNET", self.sonnet),
+            ("haiku", "HAIKU", self.haiku),
+        ]:
+            d[f"{prefix}_API_KEY"] = provider.api_key
+            d[f"{prefix}_BASE_URL"] = provider.base_url
+            d[f"{prefix}_MODEL"] = provider.model
+            if provider.api_version:
+                d[f"{prefix}_API_VERSION"] = provider.api_version
+        # Legacy keys for backward compat
+        d["BIG_MODEL"] = self.opus.model
+        d["MIDDLE_MODEL"] = self.sonnet.model
+        d["SMALL_MODEL"] = self.haiku.model
+        d["OPENAI_BASE_URL"] = self.openai_base_url
+        d["HOST"] = self.host
+        d["PORT"] = str(self.port)
+        d["LOG_LEVEL"] = self.log_level
+        d["MAX_TOKENS_LIMIT"] = str(self.max_tokens_limit)
+        d["MIN_TOKENS_LIMIT"] = str(self.min_tokens_limit)
+        d["REQUEST_TIMEOUT"] = str(self.request_timeout)
+        d["MAX_RETRIES"] = str(self.max_retries)
+        if self.anthropic_api_key:
+            d["ANTHROPIC_API_KEY"] = self.anthropic_api_key
+        return d
+
 
 try:
     config = Config()
-    print(f" Configuration loaded: API_KEY={'*' * 20}..., BASE_URL='{config.openai_base_url}'")
+    print(f"Configuration loaded: API_KEY={'set' if config.openai_api_key else 'not set'}, BASE_URL='{config.openai_base_url}'")
+    print(f"  Opus:  {config.opus.model} @ {config.opus.base_url}")
+    print(f"  Sonnet: {config.sonnet.model} @ {config.sonnet.base_url}")
+    print(f"  Haiku:  {config.haiku.model} @ {config.haiku.base_url}")
 except Exception as e:
-    print(f"=4 Configuration Error: {e}")
+    print(f"Configuration Error: {e}")
     sys.exit(1)

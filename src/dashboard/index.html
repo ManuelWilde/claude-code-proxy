@@ -1,0 +1,340 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Claude Code Proxy — Dashboard</title>
+<style>
+:root {
+  --bg: #0f1117;
+  --surface: #1a1d27;
+  --surface2: #242836;
+  --border: #2e3345;
+  --text: #e1e4ed;
+  --text-dim: #8b8fa3;
+  --accent: #6c63ff;
+  --accent-hover: #5a52e0;
+  --green: #4caf50;
+  --red: #f44336;
+  --yellow: #ff9800;
+  --radius: 8px;
+}
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: var(--bg); color: var(--text); min-height: 100vh; }
+a { color: var(--accent); }
+
+.layout { display: flex; min-height: 100vh; }
+.sidebar { width: 220px; background: var(--surface); border-right: 1px solid var(--border); padding: 20px 0; flex-shrink: 0; }
+.sidebar h1 { font-size: 14px; font-weight: 600; padding: 0 16px 16px; border-bottom: 1px solid var(--border); color: var(--accent); letter-spacing: 0.5px; }
+.nav-item { display: flex; align-items: center; gap: 10px; padding: 10px 16px; cursor: pointer; font-size: 14px; color: var(--text-dim); transition: all 0.15s; }
+.nav-item:hover { background: var(--surface2); color: var(--text); }
+.nav-item.active { color: var(--accent); background: var(--surface2); }
+.nav-item .dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+
+.main { flex: 1; padding: 24px 32px; overflow-y: auto; }
+.page { display: none; }
+.page.active { display: block; }
+
+h2 { font-size: 20px; font-weight: 600; margin-bottom: 20px; }
+h3 { font-size: 15px; font-weight: 600; margin-bottom: 12px; color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.5px; }
+
+.cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 16px; margin-bottom: 24px; }
+.card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 20px; }
+.card h4 { font-size: 16px; margin-bottom: 16px; display: flex; align-items: center; gap: 8px; }
+.card h4 .badge { font-size: 11px; padding: 2px 8px; border-radius: 10px; background: var(--surface2); color: var(--text-dim); }
+
+.field { margin-bottom: 12px; }
+.field label { display: block; font-size: 12px; color: var(--text-dim); margin-bottom: 4px; font-weight: 500; }
+.field input, .field select { width: 100%; padding: 8px 10px; background: var(--surface2); border: 1px solid var(--border); border-radius: 6px; color: var(--text); font-size: 13px; outline: none; }
+.field input:focus, .field select:focus { border-color: var(--accent); }
+.field .input-row { display: flex; gap: 6px; }
+.field .input-row input { flex: 1; }
+
+.btn { padding: 8px 16px; border: none; border-radius: 6px; cursor: pointer; font-size: 13px; font-weight: 500; transition: all 0.15s; }
+.btn-primary { background: var(--accent); color: white; }
+.btn-primary:hover { background: var(--accent-hover); }
+.btn-sm { padding: 5px 10px; font-size: 12px; }
+.btn-outline { background: transparent; border: 1px solid var(--border); color: var(--text-dim); }
+.btn-outline:hover { border-color: var(--accent); color: var(--text); }
+
+.actions { display: flex; gap: 8px; margin-top: 16px; }
+
+.status-dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
+.status-dot.ok { background: var(--green); }
+.status-dot.err { background: var(--red); }
+.status-dot.warn { background: var(--yellow); }
+.status-dot.off { background: var(--text-dim); }
+
+/* Playground */
+.playground-layout { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; height: calc(100vh - 100px); }
+.playground-input, .playground-output { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 16px; display: flex; flex-direction: column; }
+.playground-output { overflow-y: auto; }
+.playground-output pre { white-space: pre-wrap; word-break: break-word; font-family: 'SF Mono', 'Fira Code', monospace; font-size: 13px; line-height: 1.5; }
+.toolbar { display: flex; gap: 8px; margin-bottom: 12px; align-items: center; }
+.toolbar select { padding: 6px 10px; background: var(--surface2); border: 1px solid var(--border); border-radius: 6px; color: var(--text); font-size: 13px; }
+textarea { flex: 1; background: var(--surface2); border: 1px solid var(--border); border-radius: 6px; color: var(--text); padding: 12px; font-size: 13px; font-family: inherit; resize: none; outline: none; }
+textarea:focus { border-color: var(--accent); }
+
+.toast { position: fixed; bottom: 20px; right: 20px; padding: 12px 20px; border-radius: var(--radius); font-size: 13px; z-index: 100; animation: slideUp 0.2s ease; }
+.toast-success { background: var(--green); color: white; }
+.toast-error { background: var(--red); color: white; }
+@keyframes slideUp { from { transform: translateY(20px); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
+
+.server-info { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 16px; margin-bottom: 24px; display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 12px; }
+.server-info .stat label { font-size: 11px; color: var(--text-dim); text-transform: uppercase; }
+.server-info .stat div { font-size: 15px; margin-top: 2px; }
+
+.loading { display: inline-block; width: 14px; height: 14px; border: 2px solid var(--border); border-top-color: var(--accent); border-radius: 50%; animation: spin 0.6s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+</style>
+</head>
+<body>
+<div class="layout">
+  <div class="sidebar">
+    <h1>PROXY DASHBOARD</h1>
+    <div class="nav-item active" onclick="showPage('providers')">
+      <span>&#9881;</span> Providers
+    </div>
+    <div class="nav-item" onclick="showPage('playground')">
+      <span>&#9993;</span> Playground
+    </div>
+    <div class="nav-item" onclick="showPage('status')">
+      <span>&#9679;</span> Status
+    </div>
+  </div>
+  <div class="main">
+    <!-- Providers Page -->
+    <div id="page-providers" class="page active">
+      <h2>Provider Configuration</h2>
+      <div class="server-info" id="server-info"></div>
+      <h3>Model Tiers</h3>
+      <div class="cards" id="tier-cards"></div>
+      <div class="actions">
+        <button class="btn btn-primary" onclick="saveConfig()">Save Configuration</button>
+        <button class="btn btn-outline" onclick="loadConfig()">Reload</button>
+      </div>
+    </div>
+
+    <!-- Playground Page -->
+    <div id="page-playground" class="page">
+      <h2>Chat Playground</h2>
+      <div class="playground-layout">
+        <div class="playground-input">
+          <div class="toolbar">
+            <select id="pg-tier">
+              <option value="opus">Opus</option>
+              <option value="sonnet" selected>Sonnet</option>
+              <option value="haiku">Haiku</option>
+            </select>
+            <button class="btn btn-primary" onclick="sendMessage()">Send</button>
+          </div>
+          <textarea id="pg-input" placeholder="Type a message..."></textarea>
+        </div>
+        <div class="playground-output">
+          <h3 style="margin-bottom:8px;">Response</h3>
+          <pre id="pg-output">Responses will appear here...</pre>
+        </div>
+      </div>
+    </div>
+
+    <!-- Status Page -->
+    <div id="page-status" class="page">
+      <h2>Connection Status</h2>
+      <div class="cards" id="status-cards"></div>
+      <button class="btn btn-outline" onclick="refreshStatus()" style="margin-top:16px;">Refresh</button>
+    </div>
+  </div>
+</div>
+
+<script>
+const TIERS = [
+  { key: 'opus', label: 'Opus', desc: 'Heavyweight tasks' },
+  { key: 'sonnet', label: 'Sonnet', desc: 'Balanced performance' },
+  { key: 'haiku', label: 'Haiku', desc: 'Fast responses' },
+];
+
+let currentConfig = null;
+
+function showPage(name) {
+  document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
+  document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
+  document.getElementById('page-' + name).classList.add('active');
+  event.currentTarget.classList.add('active');
+  if (name === 'status') refreshStatus();
+}
+
+function toast(msg, type = 'success') {
+  const el = document.createElement('div');
+  el.className = 'toast toast-' + type;
+  el.textContent = msg;
+  document.body.appendChild(el);
+  setTimeout(() => el.remove(), 3000);
+}
+
+async function loadConfig() {
+  try {
+    const res = await fetch('/api/config');
+    currentConfig = await res.json();
+    renderServerInfo(currentConfig);
+    renderTierCards(currentConfig);
+  } catch (e) {
+    toast('Failed to load config: ' + e.message, 'error');
+  }
+}
+
+function renderServerInfo(cfg) {
+  const s = cfg.server;
+  const p = cfg.performance;
+  document.getElementById('server-info').innerHTML = `
+    <div class="stat"><label>Host</label><div>${s.host}</div></div>
+    <div class="stat"><label>Port</label><div>${s.port}</div></div>
+    <div class="stat"><label>Log Level</label><div>${s.log_level}</div></div>
+    <div class="stat"><label>Max Tokens</label><div>${p.max_tokens_limit}</div></div>
+    <div class="stat"><label>Timeout</label><div>${p.request_timeout}s</div></div>
+    <div class="stat"><label>Retries</label><div>${p.max_retries}</div></div>
+  `;
+}
+
+function renderTierCards(cfg) {
+  const container = document.getElementById('tier-cards');
+  container.innerHTML = TIERS.map(tier => {
+    const t = cfg.tiers[tier.key];
+    return `
+      <div class="card">
+        <h4>${tier.label} <span class="badge">${tier.desc}</span></h4>
+        <div class="field">
+          <label>API Key</label>
+          <div class="input-row">
+            <input type="password" id="key-${tier.key}" placeholder="${t.api_key_preview || 'Enter API key'}" />
+            <button class="btn btn-sm btn-outline" onclick="toggleKey('${tier.key}')">Show</button>
+          </div>
+        </div>
+        <div class="field">
+          <label>Base URL</label>
+          <input id="url-${tier.key}" value="${t.base_url}" />
+        </div>
+        <div class="field">
+          <label>Model</label>
+          <input id="model-${tier.key}" value="${t.model}" />
+        </div>
+        <div class="field">
+          <label>API Version (Azure, optional)</label>
+          <input id="version-${tier.key}" value="${t.api_version || ''}" placeholder="e.g. 2024-03-01-preview" />
+        </div>
+        <div class="actions">
+          <button class="btn btn-sm btn-outline" onclick="testTier('${tier.key}')">Test Connection</button>
+          <span id="test-result-${tier.key}"></span>
+        </div>
+      </div>
+    `;
+  }).join('');
+}
+
+function toggleKey(tier) {
+  const input = document.getElementById('key-' + tier);
+  input.type = input.type === 'password' ? 'text' : 'password';
+}
+
+async function saveConfig() {
+  const payload = { tiers: {} };
+  TIERS.forEach(tier => {
+    const key = tier.key;
+    const apiKey = document.getElementById('key-' + key).value;
+    const entry = {
+      base_url: document.getElementById('url-' + key).value,
+      model: document.getElementById('model-' + key).value,
+    };
+    if (apiKey) entry.api_key = apiKey;
+    const version = document.getElementById('version-' + key).value;
+    if (version) entry.api_version = version;
+    payload.tiers[key] = entry;
+  });
+
+  try {
+    const res = await fetch('/api/config', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+    const data = await res.json();
+    if (res.ok) {
+      toast('Configuration saved');
+      loadConfig();
+    } else {
+      toast('Save failed: ' + (data.detail || 'Unknown error'), 'error');
+    }
+  } catch (e) {
+    toast('Save failed: ' + e.message, 'error');
+  }
+}
+
+async function testTier(tier) {
+  const el = document.getElementById('test-result-' + tier);
+  el.innerHTML = '<span class="loading"></span>';
+  try {
+    const res = await fetch('/api/test/' + tier, { method: 'POST' });
+    const data = await res.json();
+    if (data.status === 'success') {
+      el.innerHTML = '<span class="status-dot ok"></span> Connected';
+    } else {
+      el.innerHTML = '<span class="status-dot err"></span> ' + (data.message || 'Failed');
+    }
+  } catch (e) {
+    el.innerHTML = '<span class="status-dot err"></span> Error';
+  }
+}
+
+async function refreshStatus() {
+  const container = document.getElementById('status-cards');
+  container.innerHTML = TIERS.map(t => `
+    <div class="card"><h4>${t.label}</h4><p><span class="loading"></span> Checking...</p></div>
+  `).join('');
+
+  try {
+    const res = await fetch('/api/status');
+    const data = await res.json();
+    container.innerHTML = TIERS.map(t => {
+      const s = data[t.key];
+      const dot = s.status === 'success' ? 'ok' : s.status === 'not_configured' ? 'off' : 'err';
+      return `
+        <div class="card">
+          <h4>${t.label} <span class="badge">${s.model || '-'}</span></h4>
+          <p><span class="status-dot ${dot}"></span> ${s.message || s.status}</p>
+          <p style="color:var(--text-dim);font-size:12px;margin-top:4px;">${s.base_url || ''}</p>
+        </div>
+      `;
+    }).join('');
+  } catch (e) {
+    container.innerHTML = '<div class="card"><p>Failed to load status</p></div>';
+  }
+}
+
+async function sendMessage() {
+  const message = document.getElementById('pg-input').value.trim();
+  if (!message) return;
+  const tier = document.getElementById('pg-tier').value;
+  const output = document.getElementById('pg-output');
+  output.textContent = 'Sending...';
+
+  try {
+    const res = await fetch('/api/playground', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ message, tier }),
+    });
+    const data = await res.json();
+    if (res.ok && data.content) {
+      const texts = data.content.filter(b => b.type === 'text').map(b => b.text).join('\n');
+      output.textContent = texts || JSON.stringify(data, null, 2);
+    } else {
+      output.textContent = 'Error: ' + (data.error || JSON.stringify(data, null, 2));
+    }
+  } catch (e) {
+    output.textContent = 'Request failed: ' + e.message;
+  }
+}
+
+document.getElementById('pg-input').addEventListener('keydown', e => {
+  if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); }
+});
+
+loadConfig();
+</script>
+</body>
+</html>
