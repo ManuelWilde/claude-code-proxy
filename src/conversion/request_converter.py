@@ -3,7 +3,6 @@ import logging
 from typing import Dict, Any, List
 from src.core.constants import Constants
 from src.models.claude import ClaudeMessagesRequest, ClaudeMessage
-from src.core.config import config
 
 logger = logging.getLogger(__name__)
 
@@ -75,8 +74,8 @@ def convert_claude_to_openai(
         "model": openai_model,
         "messages": openai_messages,
         "max_tokens": min(
-            max(claude_request.max_tokens, config.min_tokens_limit),
-            config.max_tokens_limit,
+            max(claude_request.max_tokens, model_manager.config.min_tokens_limit),
+            model_manager.config.max_tokens_limit,
         ),
         "temperature": claude_request.temperature,
         "stream": claude_request.stream,

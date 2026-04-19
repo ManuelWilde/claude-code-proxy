@@ -5,8 +5,6 @@ import sys
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-
 from fastapi import HTTPException
 from openai._exceptions import RateLimitError, APIConnectionError, AuthenticationError, BadRequestError
 

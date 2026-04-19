@@ -1,8 +1,10 @@
 import hmac
+import logging
 import os
-import sys
 from dataclasses import dataclass, field
 from typing import Dict, Optional
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -66,7 +68,7 @@ class Config:
         # Client validation
         self.anthropic_api_key = os.environ.get("ANTHROPIC_API_KEY")
         if not self.anthropic_api_key:
-            print("Warning: ANTHROPIC_API_KEY not set. Client API key validation will be disabled.")
+            logger.warning("ANTHROPIC_API_KEY not set. Client API key validation will be disabled.")
 
         # Server settings
         self.host = os.environ.get("HOST", "0.0.0.0")
@@ -138,14 +140,3 @@ class Config:
         if self.anthropic_api_key:
             d["ANTHROPIC_API_KEY"] = self.anthropic_api_key
         return d
-
-
-try:
-    config = Config()
-    print(f"Configuration loaded: API_KEY={'set' if config.openai_api_key else 'not set'}, BASE_URL='{config.openai_base_url}'")
-    print(f"  Opus:  {config.opus.model} @ {config.opus.base_url}")
-    print(f"  Sonnet: {config.sonnet.model} @ {config.sonnet.base_url}")
-    print(f"  Haiku:  {config.haiku.model} @ {config.haiku.base_url}")
-except Exception as e:
-    print(f"Configuration Error: {e}")
-    sys.exit(1)

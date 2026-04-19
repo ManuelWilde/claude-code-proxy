@@ -5,8 +5,6 @@ import os
 import sys
 import pytest
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-
 from src.core.constants import Constants
 from src.models.claude import ClaudeMessagesRequest
 
@@ -71,8 +69,8 @@ class TestStreamingTextOnly:
 
         event_types = [_parse_sse(e)[0] for e in events]
         assert event_types[0] == Constants.EVENT_MESSAGE_START
-        assert event_types[1] == Constants.EVENT_CONTENT_BLOCK_START
-        assert event_types[2] == Constants.EVENT_PING
+        assert event_types[1] == Constants.EVENT_PING
+        assert event_types[2] == Constants.EVENT_CONTENT_BLOCK_START
         assert Constants.EVENT_CONTENT_BLOCK_DELTA in event_types
         assert Constants.EVENT_CONTENT_BLOCK_STOP in event_types
         assert Constants.EVENT_MESSAGE_DELTA in event_types

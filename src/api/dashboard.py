@@ -1,13 +1,17 @@
+import hashlib
+import hmac
 import os
 import re
+import secrets
 import traceback
 import uuid
 from pathlib import Path
 from typing import Dict, Optional
+from urllib.parse import urlparse
 
 import httpx
-from fastapi import APIRouter, Request
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi import APIRouter, Cookie, Request
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 
 from src.core.config import Config
 from src.core.client_registry import ClientRegistry
@@ -17,6 +21,23 @@ from src.core.logging import logger
 from src.conversion.request_converter import convert_claude_to_openai
 from src.conversion.response_converter import convert_openai_to_claude_response
 from src.models.claude import ClaudeMessagesRequest
+
+
+def _get_dashboard_secret() -> str:
+    """Derive a stable dashboard secret from env or generate one."""
+    raw = os.environ.get("DASHBOARD_PASSWORD") or os.environ.get("ANTHROPIC_API_KEY")
+    if raw:
+        return hashlib.sha256(f"dashboard:{raw}".encode()).hexdigest()[:32]
+    return secrets.token_hex(32)
+
+
+DASHBOARD_SECRET = _get_dashboard_secret()
+
+
+def _check_session(session_token: Optional[str]) -> bool:
+    if not session_token:
+        return False
+    return hmac.compare_digest(session_token, DASHBOARD_SECRET)
 
 router = APIRouter()
 
@@ -109,8 +130,6 @@ PROVIDERS = {
 
 def _detect_provider(base_url: str) -> str:
     """Auto-detect provider from base URL using hostname matching."""
-    from urllib.parse import urlparse
-
     url = base_url.lower().rstrip("/")
     parsed = urlparse(url)
     hostname = parsed.hostname or ""
@@ -131,15 +150,65 @@ def _detect_provider(base_url: str) -> str:
 
 
 @router.get("/dashboard", response_class=HTMLResponse)
-async def dashboard_page():
+async def dashboard_page(session: Optional[str] = Cookie(None)):
+    if not _check_session(session):
+        return RedirectResponse(url="/dashboard/login", status_code=302)
     html_path = Path(__file__).parent.parent / "dashboard" / "index.html"
     if not html_path.exists():
         return HTMLResponse("<h1>Dashboard not found</h1>", status_code=404)
     return HTMLResponse(html_path.read_text())
 
 
+@router.get("/dashboard/login", response_class=HTMLResponse)
+async def dashboard_login_page():
+    return HTMLResponse("""<!DOCTYPE html>
+<html><head><title>Dashboard Login</title>
+<style>
+body{font-family:system-ui,sans-serif;display:flex;justify-content:center;align-items:center;height:100vh;margin:0;background:#1a1a2e;color:#e0e0e0}
+form{background:#16213e;padding:2rem;border-radius:8px;box-shadow:0 4px 20px rgba(0,0,0,.3)}
+input{width:100%;padding:.6rem;margin:.5rem 0 1rem;border:1px solid #0f3460;border-radius:4px;background:#1a1a2e;color:#e0e0e0;box-sizing:border-box}
+button{width:100%;padding:.6rem;background:#0f3460;color:#e0e0e0;border:none;border-radius:4px;cursor:pointer}
+button:hover{background:#533483}
+.error{color:#e94560;margin-bottom:1rem}
+</style></head><body><form id="login">
+<h2>Dashboard Login</h2>
+<div class="error" id="err"></div>
+<input type="password" id="password" placeholder="Dashboard password" autofocus required>
+<button type="submit">Login</button>
+</form>
+<script>
+document.getElementById('login').onsubmit=async(e)=>{
+e.preventDefault();
+const r=await fetch('/dashboard/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({password:document.getElementById('password').value})});
+if(r.ok){window.location.href='/dashboard';}else{const d=await r.json();document.getElementById('err').textContent=d.error||'Login failed';}
+};
+</script></body></html>""")
+
+
+@router.post("/dashboard/login")
+async def dashboard_login(request: Request):
+    body = await request.json()
+    password = body.get("password", "")
+    if not password:
+        return JSONResponse(status_code=400, content={"error": "Password required"})
+    token = hashlib.sha256(f"dashboard:{password}".encode()).hexdigest()[:32]
+    if not hmac.compare_digest(token, DASHBOARD_SECRET):
+        return JSONResponse(status_code=401, content={"error": "Invalid password"})
+    response = JSONResponse({"status": "ok"})
+    response.set_cookie(
+        key="session",
+        value=token,
+        httponly=True,
+        samesite="strict",
+        max_age=86400,
+    )
+    return response
+
+
 @router.get("/api/config")
-async def get_config_endpoint(request: Request):
+async def get_config_endpoint(request: Request, session: Optional[str] = Cookie(None)):
+    if not _check_session(session):
+        return JSONResponse(status_code=401, content={"error": "Not authenticated"})
     """Get current config (API keys masked)."""
     config = get_config(request)
     tiers = {}
@@ -170,7 +239,9 @@ async def get_config_endpoint(request: Request):
 
 
 @router.put("/api/config")
-async def update_config_endpoint(request: Request):
+async def update_config_endpoint(request: Request, session: Optional[str] = Cookie(None)):
+    if not _check_session(session):
+        return JSONResponse(status_code=401, content={"error": "Not authenticated"})
     """Update config from dashboard, persist to .env, refresh clients."""
     body = await request.json()
     config = get_config(request)
@@ -257,7 +328,9 @@ async def get_providers():
 
 
 @router.post("/api/discover-models/{tier}")
-async def discover_models(tier: str, request: Request):
+async def discover_models(tier: str, request: Request, session: Optional[str] = Cookie(None)):
+    if not _check_session(session):
+        return JSONResponse(status_code=401, content={"error": "Not authenticated"})
     """Try to fetch available models from the provider's /v1/models endpoint."""
     if tier not in ("opus", "sonnet", "haiku"):
         return JSONResponse(status_code=400, content={"error": f"Invalid tier: {tier}"})
@@ -298,7 +371,9 @@ async def discover_models(tier: str, request: Request):
 
 
 @router.post("/api/test/{tier}")
-async def test_tier_connection(tier: str, request: Request):
+async def test_tier_connection(tier: str, request: Request, session: Optional[str] = Cookie(None)):
+    if not _check_session(session):
+        return JSONResponse(status_code=401, content={"error": "Not authenticated"})
     """Test connection for a specific tier."""
     registry = get_client_registry(request)
     if tier not in ("opus", "sonnet", "haiku"):
@@ -308,14 +383,18 @@ async def test_tier_connection(tier: str, request: Request):
 
 
 @router.get("/api/status")
-async def get_status(request: Request):
+async def get_status(request: Request, session: Optional[str] = Cookie(None)):
+    if not _check_session(session):
+        return JSONResponse(status_code=401, content={"error": "Not authenticated"})
     """Get health status for all tiers."""
     registry = get_client_registry(request)
     return await registry.get_all_status()
 
 
 @router.post("/api/playground")
-async def playground(request: Request):
+async def playground(request: Request, session: Optional[str] = Cookie(None)):
+    if not _check_session(session):
+        return JSONResponse(status_code=401, content={"error": "Not authenticated"})
     """Send a test message through the proxy pipeline."""
     body = await request.json()
     message = body.get("message", "")

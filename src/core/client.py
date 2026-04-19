@@ -130,13 +130,10 @@ class OpenAIClient:
             self.active_requests[request_id] = cancel_event
 
         try:
-            request["stream"] = True
-            if "stream_options" not in request:
-                request["stream_options"] = {}
-            request["stream_options"]["include_usage"] = True
+            stream_request = {**request, "stream": True, "stream_options": {"include_usage": True}}
 
             streaming_completion = await self._execute_with_retry(
-                lambda: self.client.chat.completions.create(**request),
+                lambda: self.client.chat.completions.create(**stream_request),
                 "stream_completion"
             )
 
