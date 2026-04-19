@@ -20,6 +20,9 @@ class ClientRegistry:
 
     def _build_clients(self):
         """Create OpenAIClient for each tier that has an API key."""
+        # Close existing clients to free HTTP connections
+        self._close_clients()
+
         self._clients = {}
         for tier_name in ("opus", "sonnet", "haiku"):
             provider = self.config.get_tier(tier_name)
@@ -43,6 +46,24 @@ class ClientRegistry:
             self.model_manager = ModelManager(config)
         self._build_clients()
         logger.info("Client registry refreshed")
+
+    def _close_clients(self):
+        """Close all underlying HTTP clients."""
+        for client in self._clients.values():
+            if hasattr(client, "client"):
+                try:
+                    client.client.close()
+                except Exception:
+                    pass
+
+    async def async_close_clients(self):
+        """Async close all underlying HTTP clients."""
+        for client in self._clients.values():
+            if hasattr(client, "client"):
+                try:
+                    await client.client.close()
+                except Exception:
+                    pass
 
     def get_client_for_model(self, claude_model: str) -> OpenAIClient:
         """Get the appropriate client for a Claude model name."""

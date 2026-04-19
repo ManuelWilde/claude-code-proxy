@@ -5,6 +5,7 @@ from contextlib import asynccontextmanager
 import uvicorn
 from dotenv import load_dotenv
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 
 from src.api.endpoints import router as api_router
 from src.api.dashboard import router as dashboard_router
@@ -29,6 +30,23 @@ async def lifespan(app: FastAPI):
     logger.info("  Sonnet: %s @ %s", config.sonnet.model, config.sonnet.base_url)
     logger.info("  Haiku:  %s @ %s", config.haiku.model, config.haiku.base_url)
 
+    # Apply middleware with config values
+    app.add_middleware(RequestSizeLimitMiddleware, max_body_bytes=config.max_body_mb * 1024 * 1024)
+    app.add_middleware(RateLimitMiddleware, max_requests=config.rate_limit, window_seconds=60)
+
+    # CORS
+    cors_origins = os.environ.get("CORS_ORIGINS", "").split(",")
+    cors_origins = [o.strip() for o in cors_origins if o.strip()]
+    if cors_origins:
+        app.add_middleware(
+            CORSMiddleware,
+            allow_origins=cors_origins,
+            allow_credentials=True,
+            allow_methods=["*"],
+            allow_headers=["*"],
+        )
+        logger.info("  CORS: %s", cors_origins)
+
     init_app_state(app, config)
 
     yield
@@ -43,11 +61,6 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="Claude-to-OpenAI API Proxy", version="1.0.0", lifespan=lifespan)
-
-# Middleware defaults — will be re-applied with correct config on first request
-# These use conservative defaults; the actual config values are applied in lifespan
-app.add_middleware(RequestSizeLimitMiddleware, max_body_bytes=10 * 1024 * 1024)
-app.add_middleware(RateLimitMiddleware, max_requests=60, window_seconds=60)
 
 app.include_router(api_router)
 app.include_router(dashboard_router)
