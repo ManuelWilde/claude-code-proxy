@@ -78,15 +78,18 @@ class OpenAIClient:
         last_error = None
 
         # Breaker short-circuit before we even reach for the semaphore.
+        # The gate may grant a half-open probe slot if the breaker is
+        # open but due for re-check; is_probe tells us to report the
+        # outcome with probe=True so the breaker resolves correctly.
         try:
-            sem = await gate.acquire(self.base_url)
+            sem, is_probe = await gate.acquire(self.base_url)
         except QuotaExhausted as qx:
             raise HTTPException(status_code=429, detail=str(qx))
 
         try:
             for attempt in range(self.max_retries + 1):
                 try:
-                    return await coro_factory()
+                    result = await coro_factory()
                 except AuthenticationError as e:
                     raise HTTPException(status_code=401, detail=self.classify_openai_error(str(e)))
                 except BadRequestError as e:
@@ -95,15 +98,29 @@ class OpenAIClient:
                     last_error = e
                     detail_str = str(e)
 
-                    # Hard quota? Trip breaker and fail fast — do not retry.
+                    # Hard quota? Don't trust a single message — route it
+                    # through the gate's trust-but-verify policy.
                     if isinstance(e, RateLimitError):
                         hard, reset_epoch, reason = classify_429(detail_str)
                         if hard:
-                            gate.trip_quota(self.base_url, reset_epoch, reason)
-                            raise HTTPException(
-                                status_code=429,
-                                detail=f"Quota exhausted upstream: {self.classify_openai_error(detail_str)}",
+                            tripped = gate.note_hard_429(
+                                self.base_url,
+                                reset_epoch,
+                                reason,
+                                was_probe=is_probe,
                             )
+                            if tripped:
+                                raise HTTPException(
+                                    status_code=429,
+                                    detail=f"Quota exhausted upstream: {self.classify_openai_error(detail_str)}",
+                                )
+                            # Unconfirmed: treat as soft 429 and retry.
+
+                    # Probe connection errors don't prove anything about
+                    # upstream quota; let the gate release the probe slot
+                    # so the next probe can be tried sooner.
+                    if is_probe and isinstance(e, (APIConnectionError, APITimeoutError)):
+                        gate.note_probe_connection_error(self.base_url)
 
                     if attempt < self.max_retries:
                         retry_after = getattr(getattr(e, "response", None), "headers", {}) or {}
@@ -118,6 +135,7 @@ class OpenAIClient:
                             self.base_url, delay, detail_str[:200],
                         )
                         await asyncio.sleep(delay)
+                        continue
                     else:
                         if isinstance(e, RateLimitError):
                             raise HTTPException(status_code=429, detail=self.classify_openai_error(detail_str))
@@ -131,6 +149,12 @@ class OpenAIClient:
                     raise HTTPException(status_code=status_code, detail=self.classify_openai_error(str(e)))
                 except Exception as e:
                     raise HTTPException(status_code=500, detail=f"Unexpected error: {str(e)}")
+
+                # Success path: call closes the breaker if it was open
+                # (strong evidence upstream is healthy; declared reset
+                # was apparently stale).
+                gate.note_success(self.base_url)
+                return result
         finally:
             gate.release(sem)
     
