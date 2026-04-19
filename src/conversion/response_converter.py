@@ -116,15 +116,10 @@ async def convert_openai_streaming_to_claude(
         },
     })
 
-    yield _sse_event(Constants.EVENT_CONTENT_BLOCK_START, {
-        "type": Constants.EVENT_CONTENT_BLOCK_START,
-        "index": 0,
-        "content_block": {"type": Constants.CONTENT_TEXT, "text": ""},
-    })
-
     yield _sse_event(Constants.EVENT_PING, {"type": Constants.EVENT_PING})
 
-    # Process streaming chunks
+    # Process streaming chunks — text block is opened lazily on first text delta
+    text_block_opened = False
     text_block_index = 0
     tool_block_counter = 0
     current_tool_calls = {}
@@ -169,8 +164,15 @@ async def convert_openai_streaming_to_claude(
                     delta = choice.get("delta", {})
                     finish_reason = choice.get("finish_reason")
 
-                    # Handle text delta
+                    # Handle text delta — open text block lazily
                     if delta and "content" in delta and delta["content"] is not None:
+                        if not text_block_opened:
+                            text_block_opened = True
+                            yield _sse_event(Constants.EVENT_CONTENT_BLOCK_START, {
+                                "type": Constants.EVENT_CONTENT_BLOCK_START,
+                                "index": text_block_index,
+                                "content_block": {"type": Constants.CONTENT_TEXT, "text": ""},
+                            })
                         yield _sse_event(Constants.EVENT_CONTENT_BLOCK_DELTA, {
                             "type": Constants.EVENT_CONTENT_BLOCK_DELTA,
                             "index": text_block_index,
@@ -262,12 +264,14 @@ async def convert_openai_streaming_to_claude(
         })
         return
 
-    # Send final SSE events
-    yield _sse_event(Constants.EVENT_CONTENT_BLOCK_STOP, {
-        "type": Constants.EVENT_CONTENT_BLOCK_STOP,
-        "index": text_block_index,
-    })
+    # Close text block if it was opened
+    if text_block_opened:
+        yield _sse_event(Constants.EVENT_CONTENT_BLOCK_STOP, {
+            "type": Constants.EVENT_CONTENT_BLOCK_STOP,
+            "index": text_block_index,
+        })
 
+    # Close tool blocks
     for tool_data in current_tool_calls.values():
         if tool_data.get("started") and tool_data.get("claude_index") is not None:
             yield _sse_event(Constants.EVENT_CONTENT_BLOCK_STOP, {

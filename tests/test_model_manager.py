@@ -4,9 +4,6 @@ import os
 import sys
 import pytest
 
-# Ensure src is importable
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-
 
 class FakeProvider:
     def __init__(self, model):

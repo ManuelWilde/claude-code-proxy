@@ -5,8 +5,6 @@ import os
 import sys
 import pytest
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-
 from src.core.constants import Constants
 from src.models.claude import ClaudeMessagesRequest, ClaudeMessage, ClaudeTool
 
@@ -21,6 +19,9 @@ class FakeConfig:
 
 
 class FakeModelManager:
+    def __init__(self):
+        self.config = FakeConfig()
+
     def map_claude_model_to_openai(self, model):
         if "haiku" in model.lower():
             return "gpt-4o-mini"

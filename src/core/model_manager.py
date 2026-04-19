@@ -1,6 +1,3 @@
-from src.core.config import config
-
-
 class ModelManager:
     def __init__(self, config):
         self.config = config
@@ -35,6 +32,3 @@ class ModelManager:
         tier = self.get_tier(claude_model)
         provider = self.config.get_tier(tier)
         return provider.model
-
-
-model_manager = ModelManager(config)

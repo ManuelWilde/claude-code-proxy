@@ -15,13 +15,9 @@ logger = logging.getLogger(__name__)
 _registry: Optional[ClientRegistry] = None
 
 
-def init_app_state(app: FastAPI, config: Optional[Config] = None) -> None:
+def init_app_state(app: FastAPI, config: Config) -> None:
     """Wire up app.state with config, client_registry, and model_manager."""
     global _registry
-
-    if config is None:
-        from src.core.config import config as _config
-        config = _config
 
     app.state.config = config
     app.state.model_manager = ModelManager(config)

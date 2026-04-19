@@ -1,15 +1,13 @@
 import logging
-from src.core.config import config
+import os
 
-# Parse log level - extract just the first word to handle comments
-log_level = config.log_level.split()[0].upper()
+# Read log level directly from env (avoid circular import with config module)
+log_level = os.environ.get("LOG_LEVEL", "INFO").split()[0].upper()
 
-# Validate and set default if invalid
 valid_levels = ['DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL']
 if log_level not in valid_levels:
     log_level = 'INFO'
 
-# Logging Configuration
 logging.basicConfig(
     level=getattr(logging, log_level),
     format='%(asctime)s - %(levelname)s - %(message)s',

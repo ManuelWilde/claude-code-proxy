@@ -30,7 +30,12 @@ class RequestSizeLimitMiddleware(BaseHTTPMiddleware):
 
 
 class RateLimitMiddleware(BaseHTTPMiddleware):
-    """Simple in-memory per-IP rate limiting using a sliding window."""
+    """Simple in-memory per-IP rate limiting using a sliding window.
+
+    Note: state is stored in-process. With multiple uvicorn workers
+    (--workers N), each worker tracks limits independently. For shared
+    rate limiting across workers, use Redis or an external rate limiter.
+    """
 
     _PRUNE_INTERVAL = 100  # prune stale IPs every N requests
 
