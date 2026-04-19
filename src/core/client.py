@@ -1,6 +1,7 @@
 import asyncio
 import json
 import logging
+import random
 import time
 from fastapi import HTTPException
 from typing import Optional, AsyncGenerator, Dict, Any
@@ -8,7 +9,13 @@ from openai import AsyncOpenAI, AsyncAzureOpenAI
 from openai.types.chat import ChatCompletion, ChatCompletionChunk
 from openai._exceptions import APIError, RateLimitError, AuthenticationError, BadRequestError, APIConnectionError, APITimeoutError
 
+from src.core.rate_gate import RateGate, QuotaExhausted, classify_429
+
 logger = logging.getLogger(__name__)
+
+
+STREAM_CHUNK_TIMEOUT = 120  # seconds between chunks before considering stream stalled
+
 
 class OpenAIClient:
     """Async OpenAI client with cancellation and retry support."""
@@ -18,23 +25,28 @@ class OpenAIClient:
         self.base_url = base_url
         self.custom_headers = custom_headers or {}
         self.max_retries = max_retries
-        
+
         # Prepare default headers
         default_headers = {
             "Content-Type": "application/json",
             "User-Agent": "claude-proxy/1.0.0"
         }
-        
+
         # Merge custom headers with default headers
         all_headers = {**default_headers, **self.custom_headers}
-        
-        # Detect if using Azure and instantiate the appropriate client
+
+        # Detect if using Azure and instantiate the appropriate client.
+        # max_retries=0: the openai SDK's internal retry is disabled so the
+        # fabric RateGate is the sole retry authority. Without this, the SDK
+        # silently retries 429s at the HTTP layer before our quota breaker
+        # ever sees them, burning tokens against an already-exhausted quota.
         if api_version:
             self.client = AsyncAzureOpenAI(
                 api_key=api_key,
                 azure_endpoint=base_url,
                 api_version=api_version,
                 timeout=timeout,
+                max_retries=0,
                 default_headers=all_headers
             )
         else:
@@ -42,6 +54,7 @@ class OpenAIClient:
                 api_key=api_key,
                 base_url=base_url,
                 timeout=timeout,
+                max_retries=0,
                 default_headers=all_headers
             )
         self.active_requests: Dict[str, asyncio.Event] = {}
@@ -51,38 +64,80 @@ class OpenAIClient:
         return isinstance(error, (RateLimitError, APIConnectionError, APITimeoutError))
 
     async def _execute_with_retry(self, coro_factory, operation: str = "request"):
-        """Execute an async callable with exponential backoff retry."""
+        """Execute an async callable behind the fabric RateGate.
+
+        - Acquires a per-upstream semaphore slot (caps fleet-wide concurrency).
+        - Fails fast with HTTP 429 if the upstream's quota breaker is open.
+        - On soft 429, honours ``Retry-After`` and a configurable floor instead
+          of hammering with a hardcoded 1-2s backoff.
+        - On hard quota exhaustion (z.ai code 1310, OpenAI ``insufficient_quota``,
+          etc.) trips the breaker so subsequent requests short-circuit until
+          the declared reset timestamp.
+        """
+        gate = RateGate.instance()
         last_error = None
-        for attempt in range(self.max_retries + 1):
-            try:
-                return await coro_factory()
-            except AuthenticationError as e:
-                raise HTTPException(status_code=401, detail=self.classify_openai_error(str(e)))
-            except BadRequestError as e:
-                raise HTTPException(status_code=400, detail=self.classify_openai_error(str(e)))
-            except (RateLimitError, APIConnectionError, APITimeoutError) as e:
-                last_error = e
-                if attempt < self.max_retries:
-                    delay = (2 ** attempt) + (attempt * 0.5)
-                    logger.warning(f"{operation} failed (attempt {attempt + 1}/{self.max_retries + 1}), retrying in {delay:.1f}s: {e}")
-                    await asyncio.sleep(delay)
-                else:
+
+        # Breaker short-circuit before we even reach for the semaphore.
+        try:
+            sem = await gate.acquire(self.base_url)
+        except QuotaExhausted as qx:
+            raise HTTPException(status_code=429, detail=str(qx))
+
+        try:
+            for attempt in range(self.max_retries + 1):
+                try:
+                    return await coro_factory()
+                except AuthenticationError as e:
+                    raise HTTPException(status_code=401, detail=self.classify_openai_error(str(e)))
+                except BadRequestError as e:
+                    raise HTTPException(status_code=400, detail=self.classify_openai_error(str(e)))
+                except (RateLimitError, APIConnectionError, APITimeoutError) as e:
+                    last_error = e
+                    detail_str = str(e)
+
+                    # Hard quota? Trip breaker and fail fast — do not retry.
                     if isinstance(e, RateLimitError):
-                        raise HTTPException(status_code=429, detail=self.classify_openai_error(str(e)))
-                    elif isinstance(e, APIConnectionError):
-                        raise HTTPException(status_code=502, detail=f"Connection error: {self.classify_openai_error(str(e))}")
-                    elif isinstance(e, APITimeoutError):
-                        raise HTTPException(status_code=504, detail=f"Request timed out: {self.classify_openai_error(str(e))}")
-                    raise HTTPException(status_code=502, detail=self.classify_openai_error(str(e)))
-            except APIError as e:
-                status_code = getattr(e, 'status_code', None) or 500
-                raise HTTPException(status_code=status_code, detail=self.classify_openai_error(str(e)))
-            except Exception as e:
-                raise HTTPException(status_code=500, detail=f"Unexpected error: {str(e)}")
+                        hard, reset_epoch, reason = classify_429(detail_str)
+                        if hard:
+                            gate.trip_quota(self.base_url, reset_epoch, reason)
+                            raise HTTPException(
+                                status_code=429,
+                                detail=f"Quota exhausted upstream: {self.classify_openai_error(detail_str)}",
+                            )
+
+                    if attempt < self.max_retries:
+                        retry_after = getattr(getattr(e, "response", None), "headers", {}) or {}
+                        ra_hdr = retry_after.get("Retry-After") if hasattr(retry_after, "get") else None
+                        soft_floor = gate.suggest_soft_backoff(ra_hdr)
+                        base_delay = max(soft_floor, (2 ** attempt) + (attempt * 0.5))
+                        jitter = random.uniform(0, 0.5)
+                        delay = base_delay + jitter
+                        logger.warning(
+                            "%s soft-429/conn (attempt %d/%d) upstream=%s retry in %.1fs: %s",
+                            operation, attempt + 1, self.max_retries + 1,
+                            self.base_url, delay, detail_str[:200],
+                        )
+                        await asyncio.sleep(delay)
+                    else:
+                        if isinstance(e, RateLimitError):
+                            raise HTTPException(status_code=429, detail=self.classify_openai_error(detail_str))
+                        elif isinstance(e, APIConnectionError):
+                            raise HTTPException(status_code=502, detail=f"Connection error: {self.classify_openai_error(detail_str)}")
+                        elif isinstance(e, APITimeoutError):
+                            raise HTTPException(status_code=504, detail=f"Request timed out: {self.classify_openai_error(detail_str)}")
+                        raise HTTPException(status_code=502, detail=self.classify_openai_error(detail_str))
+                except APIError as e:
+                    status_code = getattr(e, 'status_code', None) or 500
+                    raise HTTPException(status_code=status_code, detail=self.classify_openai_error(str(e)))
+                except Exception as e:
+                    raise HTTPException(status_code=500, detail=f"Unexpected error: {str(e)}")
+        finally:
+            gate.release(sem)
     
     async def create_chat_completion(self, request: Dict[str, Any], request_id: Optional[str] = None) -> Dict[str, Any]:
         """Send chat completion to OpenAI API with cancellation and retry support."""
 
+        cancel_event = None
         if request_id:
             cancel_event = asyncio.Event()
             self.active_requests[request_id] = cancel_event
@@ -93,25 +148,32 @@ class OpenAIClient:
                     self.client.chat.completions.create(**request)
                 )
 
-                if request_id:
+                if cancel_event is not None:
                     cancel_task = asyncio.create_task(cancel_event.wait())
-                    done, pending = await asyncio.wait(
-                        [completion_task, cancel_task],
-                        return_when=asyncio.FIRST_COMPLETED
-                    )
+                    try:
+                        done, pending = await asyncio.wait(
+                            [completion_task, cancel_task],
+                            return_when=asyncio.FIRST_COMPLETED
+                        )
 
-                    for task in pending:
-                        task.cancel()
-                        try:
-                            await task
-                        except asyncio.CancelledError:
-                            pass
+                        for task in pending:
+                            task.cancel()
 
-                    if cancel_task in done:
+                        if cancel_task in done:
+                            completion_task.cancel()
+                            raise HTTPException(status_code=499, detail="Request cancelled by client")
+
+                        return completion_task.result()
+                    except HTTPException:
+                        raise
+                    except Exception:
+                        # Ensure task is cancelled on any unexpected error
                         completion_task.cancel()
-                        raise HTTPException(status_code=499, detail="Request cancelled by client")
-
-                    return await completion_task
+                        raise
+                    finally:
+                        # Clean up cancel_task
+                        if not cancel_task.done():
+                            cancel_task.cancel()
                 else:
                     return await completion_task
 
@@ -119,12 +181,13 @@ class OpenAIClient:
             return completion.model_dump()
 
         finally:
-            if request_id and request_id in self.active_requests:
-                del self.active_requests[request_id]
+            if request_id:
+                self.active_requests.pop(request_id, None)
     
     async def create_chat_completion_stream(self, request: Dict[str, Any], request_id: Optional[str] = None) -> AsyncGenerator[str, None]:
         """Send streaming chat completion to OpenAI API with cancellation and retry support."""
 
+        cancel_event = None
         if request_id:
             cancel_event = asyncio.Event()
             self.active_requests[request_id] = cancel_event
@@ -137,10 +200,13 @@ class OpenAIClient:
                 "stream_completion"
             )
 
-            async for chunk in streaming_completion:
-                if request_id and request_id in self.active_requests:
-                    if self.active_requests[request_id].is_set():
-                        raise HTTPException(status_code=499, detail="Request cancelled by client")
+            async def _chunk_iter():
+                async for chunk in streaming_completion:
+                    yield chunk
+
+            async for chunk in _chunk_iter():
+                if cancel_event is not None and cancel_event.is_set():
+                    raise HTTPException(status_code=499, detail="Request cancelled by client")
 
                 chunk_dict = chunk.model_dump()
                 chunk_json = json.dumps(chunk_dict, ensure_ascii=False)
@@ -149,8 +215,8 @@ class OpenAIClient:
             yield "data: [DONE]"
 
         finally:
-            if request_id and request_id in self.active_requests:
-                del self.active_requests[request_id]
+            if request_id:
+                self.active_requests.pop(request_id, None)
 
     def classify_openai_error(self, error_detail: Any) -> str:
         """Provide specific error guidance for common OpenAI API issues."""

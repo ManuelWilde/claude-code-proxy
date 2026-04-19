@@ -18,36 +18,23 @@ load_dotenv()
 logger = logging.getLogger(__name__)
 
 
+# Build config once at module scope so middleware values are available
+# before the app starts. Starlette forbids add_middleware() after startup.
+_boot_config = Config()
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    config = Config()
     logger.info(
         "Configuration loaded: API_KEY=%s, BASE_URL='%s'",
-        "set" if config.openai_api_key else "not set",
-        config.openai_base_url,
+        "set" if _boot_config.openai_api_key else "not set",
+        _boot_config.openai_base_url,
     )
-    logger.info("  Opus:  %s @ %s", config.opus.model, config.opus.base_url)
-    logger.info("  Sonnet: %s @ %s", config.sonnet.model, config.sonnet.base_url)
-    logger.info("  Haiku:  %s @ %s", config.haiku.model, config.haiku.base_url)
+    logger.info("  Opus:  %s @ %s", _boot_config.opus.model, _boot_config.opus.base_url)
+    logger.info("  Sonnet: %s @ %s", _boot_config.sonnet.model, _boot_config.sonnet.base_url)
+    logger.info("  Haiku:  %s @ %s", _boot_config.haiku.model, _boot_config.haiku.base_url)
 
-    # Apply middleware with config values
-    app.add_middleware(RequestSizeLimitMiddleware, max_body_bytes=config.max_body_mb * 1024 * 1024)
-    app.add_middleware(RateLimitMiddleware, max_requests=config.rate_limit, window_seconds=60)
-
-    # CORS
-    cors_origins = os.environ.get("CORS_ORIGINS", "").split(",")
-    cors_origins = [o.strip() for o in cors_origins if o.strip()]
-    if cors_origins:
-        app.add_middleware(
-            CORSMiddleware,
-            allow_origins=cors_origins,
-            allow_credentials=True,
-            allow_methods=["*"],
-            allow_headers=["*"],
-        )
-        logger.info("  CORS: %s", cors_origins)
-
-    init_app_state(app, config)
+    init_app_state(app, _boot_config)
 
     yield
 
@@ -61,6 +48,22 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="Claude-to-OpenAI API Proxy", version="1.0.0", lifespan=lifespan)
+
+# Middleware MUST be registered before the app starts serving; do it here at
+# module scope rather than inside lifespan (Starlette >= 0.35 rejects late adds).
+app.add_middleware(RequestSizeLimitMiddleware, max_body_bytes=_boot_config.max_body_mb * 1024 * 1024)
+app.add_middleware(RateLimitMiddleware, max_requests=_boot_config.rate_limit, window_seconds=60)
+
+_cors_origins = [o.strip() for o in os.environ.get("CORS_ORIGINS", "").split(",") if o.strip()]
+if _cors_origins:
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=_cors_origins,
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
+    logger.info("CORS origins configured: %s", _cors_origins)
 
 app.include_router(api_router)
 app.include_router(dashboard_router)
