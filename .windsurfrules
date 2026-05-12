@@ -1,0 +1,33 @@
+# Windsurf Rules
+
+## AI BASELINE (MANUEL-2026-05)
+
+Diese Baseline adressiert haeufige Fehlmuster in agentischem Coding:
+- zu breite, disruptive Mehrdatei-Aenderungen
+- implizite API-Annahmen statt verifizierter Referenzen
+- fehlende Verifikation vor Abschluss
+- Kontextdrift in langen Sessions
+
+Verbindliche Regeln:
+1) Erst Scope fixieren: Ziel, betroffene Dateien, Nicht-Ziele.
+2) Nur kleine Diffs; keine grossen Umschreibungen ohne explizite Freigabe.
+3) Niemals bestehende Logik loeschen/ersetzen, ohne den Grund im Diff klar zu machen.
+4) Bei 3+ Dateien: erst kurzer Plan, dann iterativ umsetzen.
+5) Nach jeder Aenderung passende Checks laufen lassen (`build`, `lint`, `test`).
+6) Unklare APIs/Imports zuerst im Repo verifizieren, nicht raten.
+7) Wenn Unsicherheit bleibt: stoppen, Annahmen offenlegen, Rueckfrage stellen.
+8) Keine destruktiven Git-Aktionen ohne ausdrueckliche User-Freigabe.
+
+## STACK BASELINE: PYTHON (MANUEL-2026-05)
+
+- Vor Abschluss relevante Tests ausfuehren (`pytest` mit Scope, falls moeglich).
+- Lint/Type-Checks nutzen, wenn im Projekt vorhanden (z. B. ruff/mypy).
+- Keine stillen Interface-Aenderungen an oeffentlichen Funktionen/Klassen.
+- Fehlerbehandlung explizit halten; broad `except` nur mit begruendetem Fall.
+- Daten-/Konfigurationspfade nicht hart kodieren, wenn Projektkonventionen existieren.
+
+## FAMILY PROFILE: GENERAL (MANUEL-2026-05)
+
+- Kleine, reversible Aenderungen bevorzugen.
+- Vor Merge immer lokale Qualitaetschecks.
+- Unsichere Annahmen explizit machen statt implizit codieren.

@@ -125,3 +125,31 @@ Claude Code will directly apply proposed changes and modifications using the ava
 ## Recent Changes
 
 - Updated MIDDLE_MODEL config to default to BIG_MODEL value for consistency
+
+## AI BASELINE (MANUEL-2026-05)
+
+Purpose: reduce regressions and keep Claude edits predictable in large codebases.
+
+Mandatory workflow:
+1. Define task boundary first (goal, touched files, non-goals).
+2. Prefer minimal, targeted edits over broad rewrites.
+3. Do not remove or replace existing behavior unless explicitly required.
+4. For multi-file work (3+ files), produce a short plan before editing.
+5. Validate with project-appropriate checks (`build`, `lint`, `test`) before completion.
+6. Verify symbols/APIs from local code; never rely on guessed interfaces.
+7. If context is ambiguous, pause and surface assumptions.
+8. Never run destructive git operations without explicit user approval.
+
+## STACK BASELINE: PYTHON (MANUEL-2026-05)
+
+- Run relevant tests before completion (scoped `pytest` when possible).
+- Use configured lint/type checks if available (e.g., ruff/mypy).
+- Avoid silent interface changes in public functions/classes.
+- Keep error handling explicit; avoid broad `except` unless justified.
+- Follow project config/path conventions instead of hardcoded paths.
+
+## FAMILY PROFILE: GENERAL (MANUEL-2026-05)
+
+- Prefer small, reversible edits.
+- Run local quality checks before considering work complete.
+- Surface assumptions explicitly instead of encoding implicit guesses.
