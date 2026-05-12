@@ -1,0 +1,17 @@
+---
+description: AI workflow baseline for safe, test-first, minimal-diff development
+alwaysApply: true
+---
+
+# AI Workflow Baseline
+
+- Bevorzuge minimale, zielgerichtete Diffs statt breiter Refactors.
+- Halte dich strikt an den bestehenden Stil und die bestehende Architektur des Projekts.
+- Aendere nur Dateien, die fur die Aufgabe notwendig sind; keine opportunistischen Umbauten.
+- Fuehre nach Code-Aenderungen passende Verifikation aus (`build`, `lint`, `test`) und melde Ergebnisse transparent.
+- Bei Unsicherheit erst analysieren, dann kleinschrittig umsetzen; Risiken explizit nennen.
+- Schreibe klare Prompts/Commit-Beschreibungen mit Ziel, Scope, Constraints und Akzeptanzkriterien.
+- Keine destruktiven Git-Aktionen (z. B. hard reset, force push), sofern nicht explizit angefordert.
+- Bestehende Nutzer-Aenderungen niemals ungefragt verwerfen oder ueberschreiben.
+- Fuer komplexe Aufgaben iterativ arbeiten: Plan -> Minimal-Patch -> Verifikation -> Haertung.
+- Sicherheit und Stabilitaet priorisieren: keine Secrets einchecken, Eingaben validieren, Fehlerfaelle testen.
